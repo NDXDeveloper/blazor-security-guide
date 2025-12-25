@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # NGINX - Reverse Proxy (Seul point d'entrée)
+  # =============================================================================
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/nginx-server.conf:/etc/nginx/nginx.conf:ro
+      # Décommenter pour SSL :
+      # - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - blazor
+    networks:
+      - frontend
+    restart: unless-stopped
+
+  # =============================================================================
+  # BLAZOR SERVER - Application UI
+  # =============================================================================
+  # Point d'entrée applicatif. Gère les connexions SignalR des utilisateurs.
+  # Communique avec l'API sur le réseau privé.
+  blazor:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    # IMPORTANT : "expose" et non "ports"
+    # Accessible uniquement depuis Nginx, pas depuis Internet directement
+    expose:
+      - "5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5000
+      # URL de l'API interne (réseau Docker)
+      - ApiSettings__BaseUrl=http://api:5001
+      # Configuration SignalR
+      - SignalR__MaximumReceiveMessageSize=65536
+      - SignalR__KeepAliveInterval=15
+      - SignalR__ClientTimeoutInterval=60
+    networks:
+      - frontend  # Pour communication avec Nginx
+      - backend   # Pour communication avec l'API
+    depends_on:
+      - api
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  # =============================================================================
+  # API ASP.NET Core - INTERNE (Non exposée à Internet)
+  # =============================================================================
+  # Cette API n'est accessible que depuis le réseau Docker "backend".
+  # Elle n'a PAS de mapping "ports", seulement "expose".
+  # Un attaquant sur Internet ne peut PAS l'appeler directement.
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    # ==========================================================================
+    # CRITIQUE : "expose" et NON "ports"
+    # ==========================================================================
+    # - "expose" : Le port est accessible uniquement dans le réseau Docker
+    # - "ports"  : Le port est mappé sur l'hôte et accessible depuis Internet
+    #
+    # C'est LA différence fondamentale qui rend cette architecture plus sûre.
+    expose:
+      - "5001"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5001
+      # Clé d'API interne (pour auth machine-to-machine)
+      - ApiSettings__InternalApiKey=${INTERNAL_API_KEY:-changeme-in-production}
+    networks:
+      - backend  # UNIQUEMENT le réseau backend, pas frontend !
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+# =============================================================================
+# RÉSEAUX
+# =============================================================================
+# Deux réseaux isolés pour la sécurité :
+# - frontend : Nginx <-> Blazor Server
+# - backend  : Blazor Server <-> API (isolé d'Internet)
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    # Le réseau backend est interne : pas de gateway vers Internet
+    internal: true
