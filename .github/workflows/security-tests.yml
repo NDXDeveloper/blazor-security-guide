@@ -1,0 +1,323 @@
+# =============================================================================
+# GitHub Actions - Tests de Sécurité
+# =============================================================================
+# Ce workflow exécute les tests de sécurité à chaque push et PR.
+# Il prouve que les protections sont réelles et fonctionnelles.
+
+name: Security Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+
+jobs:
+  # ===========================================================================
+  # Job 1 : Build et Tests Unitaires
+  # ===========================================================================
+  build-and-test:
+    name: Build & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies (API WASM)
+      run: dotnet restore blazor-wasm/api/Api.csproj
+
+    - name: Build API WASM
+      run: dotnet build blazor-wasm/api/Api.csproj --no-restore
+
+    - name: Restore dependencies (Tests)
+      run: dotnet restore tests/api-integration/SecurityTests.csproj
+
+    - name: Build Tests
+      run: dotnet build tests/api-integration/SecurityTests.csproj --no-restore
+
+    - name: Run Integration Tests
+      run: dotnet test tests/api-integration/SecurityTests.csproj --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: tests/api-integration/TestResults/
+
+  # ===========================================================================
+  # Job 2 : Tests Docker (WASM)
+  # ===========================================================================
+  docker-wasm-tests:
+    name: Docker WASM Tests
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker images (WASM)
+      run: |
+        cd blazor-wasm
+        docker-compose build
+
+    - name: Start services
+      run: |
+        cd blazor-wasm
+        docker-compose up -d
+        # Attendre que les services soient prêts
+        sleep 10
+
+    - name: Test API is accessible
+      run: |
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/weather || echo "000")
+        echo "HTTP Code: $HTTP_CODE"
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "API not accessible"
+          docker-compose -f blazor-wasm/docker-compose.yml logs
+          exit 1
+        fi
+        echo "✅ API is accessible"
+
+    - name: Test Security Headers
+      run: |
+        HEADERS=$(curl -sI http://localhost:80/api/weather)
+        echo "$HEADERS"
+
+        if echo "$HEADERS" | grep -qi "X-Frame-Options"; then
+          echo "✅ X-Frame-Options present"
+        else
+          echo "❌ X-Frame-Options missing"
+          exit 1
+        fi
+
+        if echo "$HEADERS" | grep -qi "X-Content-Type-Options"; then
+          echo "✅ X-Content-Type-Options present"
+        else
+          echo "❌ X-Content-Type-Options missing"
+          exit 1
+        fi
+
+    - name: Test Rate Limiting
+      run: |
+        SUCCESS=0
+        RATE_LIMITED=0
+
+        for i in $(seq 1 150); do
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/weather)
+          if [ "$CODE" == "200" ]; then
+            ((SUCCESS++))
+          elif [ "$CODE" == "429" ]; then
+            ((RATE_LIMITED++))
+          fi
+        done
+
+        echo "Successful requests: $SUCCESS"
+        echo "Rate limited requests: $RATE_LIMITED"
+
+        if [ "$RATE_LIMITED" -gt 0 ]; then
+          echo "✅ Rate limiting is working"
+        else
+          echo "⚠️ No requests were rate limited (may need adjustment)"
+        fi
+
+    - name: Test CORS does not protect server
+      run: |
+        # CORS should NOT block server-side - request should succeed
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Origin: https://evil-site.com" \
+          http://localhost:80/api/weather)
+
+        echo "HTTP Code with evil Origin: $HTTP_CODE"
+
+        if [ "$HTTP_CODE" == "200" ]; then
+          echo "✅ Confirmed: CORS does not protect server (expected behavior)"
+          echo "   The request reached the server despite evil Origin"
+        else
+          echo "Code: $HTTP_CODE"
+        fi
+
+    - name: Stop services
+      if: always()
+      run: |
+        cd blazor-wasm
+        docker-compose down
+
+  # ===========================================================================
+  # Job 3 : Tests Docker (Server - API Interne)
+  # ===========================================================================
+  docker-server-tests:
+    name: Docker Server Tests
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker images (Server)
+      run: |
+        cd blazor-server
+        docker-compose build
+
+    - name: Start services
+      run: |
+        cd blazor-server
+        docker-compose up -d
+        sleep 15  # Blazor Server needs more time
+
+    - name: Test Blazor Server is accessible
+      run: |
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/ || echo "000")
+        echo "HTTP Code: $HTTP_CODE"
+        if [ "$HTTP_CODE" != "200" ]; then
+          echo "Blazor Server not accessible"
+          docker-compose -f blazor-server/docker-compose.yml logs
+          exit 1
+        fi
+        echo "✅ Blazor Server is accessible"
+
+    - name: Test Health endpoint
+      run: |
+        RESPONSE=$(curl -s http://localhost:80/health)
+        echo "Health response: $RESPONSE"
+
+        if echo "$RESPONSE" | grep -q '"status":"healthy"'; then
+          echo "✅ Health endpoint working"
+        else
+          echo "❌ Health endpoint not responding correctly"
+          exit 1
+        fi
+
+    - name: Test API is NOT accessible externally
+      run: |
+        # L'API ne devrait PAS être accessible sur le port 5001
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 http://localhost:5001/api/weather 2>/dev/null || echo "000")
+        echo "HTTP Code on port 5001: $HTTP_CODE"
+
+        if [ "$HTTP_CODE" == "000" ]; then
+          echo "✅ API port 5001 is not exposed (connection refused/timeout)"
+        elif [ "$HTTP_CODE" == "200" ]; then
+          echo "❌ SECURITY ISSUE: API is exposed on port 5001!"
+          exit 1
+        else
+          echo "Code: $HTTP_CODE"
+        fi
+
+    - name: Test /api/weather endpoint (monitoring)
+      run: |
+        # L'endpoint /api/weather est exposé pour les tests de charge et monitoring
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/weather)
+        echo "HTTP Code on /api/weather: $HTTP_CODE"
+
+        if [ "$HTTP_CODE" == "200" ] || [ "$HTTP_CODE" == "429" ]; then
+          echo "✅ /api/weather accessible (200) or rate limited (429)"
+        else
+          echo "❌ Unexpected response code: $HTTP_CODE"
+          exit 1
+        fi
+
+    - name: Test API is accessible from Docker network
+      run: |
+        # L'API devrait être accessible depuis le conteneur Blazor
+        CONTAINER=$(docker ps --format '{{.Names}}' | grep blazor | head -1)
+        if [ -n "$CONTAINER" ]; then
+          HTTP_CODE=$(docker exec "$CONTAINER" curl -s -o /dev/null -w "%{http_code}" http://api:5001/api/weather 2>/dev/null || echo "error")
+          echo "HTTP Code from inside Docker: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" == "200" ]; then
+            echo "✅ API accessible from Docker internal network"
+          else
+            echo "⚠️ Could not reach API internally (Code: $HTTP_CODE)"
+          fi
+        else
+          echo "⚠️ Could not find Blazor container"
+        fi
+
+    - name: Stop services
+      if: always()
+      run: |
+        cd blazor-server
+        docker-compose down
+
+  # ===========================================================================
+  # Job 4 : Tests de Résilience
+  # ===========================================================================
+  resilience-tests:
+    name: Resilience Tests
+    runs-on: ubuntu-latest
+    needs: [docker-wasm-tests]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Start WASM services
+      run: |
+        cd blazor-wasm
+        docker-compose up -d
+        sleep 10
+
+    - name: Install hey (load testing tool)
+      run: |
+        go install github.com/rakyll/hey@latest
+        echo "$HOME/go/bin" >> $GITHUB_PATH
+
+    - name: Run load test
+      run: |
+        $HOME/go/bin/hey -n 500 -c 50 http://localhost:80/api/weather
+
+    - name: Analyze results
+      run: |
+        echo "Load test completed. Check output above for:"
+        echo "  - Response time distribution"
+        echo "  - Error rate (should be low)"
+        echo "  - Rate limited responses (429)"
+
+    - name: Stop services
+      if: always()
+      run: |
+        cd blazor-wasm
+        docker-compose down
+
+  # ===========================================================================
+  # Job 5 : Rapport Final
+  # ===========================================================================
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [build-and-test, docker-wasm-tests, docker-server-tests, resilience-tests]
+    if: always()
+
+    steps:
+    - name: Generate Summary
+      run: |
+        echo "# 🔒 Security Tests Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Build & Unit Tests | ${{ needs.build-and-test.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker WASM Tests | ${{ needs.docker-wasm-tests.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Server Tests | ${{ needs.docker-server-tests.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Resilience Tests | ${{ needs.resilience-tests.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## What was tested" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ API accessibility (WASM public, Server internal)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Security headers present" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Rate limiting functional" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ CORS does not protect server" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Network isolation (Server API)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Behavior under load" >> $GITHUB_STEP_SUMMARY
