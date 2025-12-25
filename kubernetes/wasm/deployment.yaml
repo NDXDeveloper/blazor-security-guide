@@ -1,0 +1,234 @@
+# =============================================================================
+# Kubernetes - Blazor WASM + API publique
+# =============================================================================
+# À utiliser uniquement si vous avez réellement besoin de Kubernetes.
+# Pour la plupart des cas, Docker Compose suffit.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: blazor-wasm
+
+---
+# =============================================================================
+# ConfigMap - Configuration application
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: blazor-wasm
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  RateLimiting__PermitLimit: "100"
+  RateLimiting__Window: "60"
+
+---
+# =============================================================================
+# Secret - Données sensibles
+# =============================================================================
+# En production, utilisez un gestionnaire de secrets (Vault, Azure Key Vault)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+  namespace: blazor-wasm
+type: Opaque
+stringData:
+  JWT_SECRET: "CHANGEZ-MOI-EN-PRODUCTION-minimum-32-caracteres"
+
+---
+# =============================================================================
+# Deployment - API ASP.NET Core
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: blazor-wasm
+  labels:
+    app: api
+spec:
+  replicas: 2  # Minimum pour HA
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: api
+        image: your-registry/blazor-wasm-api:latest
+        ports:
+        - containerPort: 5000
+        envFrom:
+        - configMapRef:
+            name: api-config
+        env:
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: api-secrets
+              key: JWT_SECRET
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+
+---
+# =============================================================================
+# Service - Expose l'API en interne
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: blazor-wasm
+spec:
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 5000
+  type: ClusterIP
+
+---
+# =============================================================================
+# HorizontalPodAutoscaler - Scaling automatique
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-hpa
+  namespace: blazor-wasm
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# =============================================================================
+# Ingress - Point d'entrée externe
+# =============================================================================
+# Requiert nginx-ingress controller et cert-manager pour SSL
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blazor-wasm-ingress
+  namespace: blazor-wasm
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Rate limiting au niveau ingress
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+    # Headers de sécurité
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      add_header X-Frame-Options "DENY" always;
+      add_header X-Content-Type-Options "nosniff" always;
+      add_header X-XSS-Protection "1; mode=block" always;
+spec:
+  tls:
+  - hosts:
+    - votre-app.com
+    secretName: blazor-wasm-tls
+  rules:
+  - host: votre-app.com
+    http:
+      paths:
+      # API
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api
+            port:
+              number: 80
+      # Fichiers statiques WASM (servir depuis CDN recommandé)
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: static-files
+            port:
+              number: 80
+
+---
+# =============================================================================
+# NetworkPolicy - Isolation réseau
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-network-policy
+  namespace: blazor-wasm
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Autoriser uniquement depuis l'ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5000
+  egress:
+  # Autoriser les requêtes DNS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
+  # Autoriser les connexions sortantes (DB, services externes)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16

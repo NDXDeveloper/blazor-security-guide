@@ -1,0 +1,335 @@
+# =============================================================================
+# Kubernetes - Blazor Server + API interne
+# =============================================================================
+# Configuration plus complexe car Blazor Server est stateful (SignalR).
+# Nécessite sticky sessions et Redis backplane pour le scaling.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: blazor-server
+
+---
+# =============================================================================
+# ConfigMap
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blazor-config
+  namespace: blazor-server
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  # URL de l'API interne (Service Kubernetes)
+  ApiSettings__BaseUrl: "http://api:80"
+  # Configuration SignalR
+  SignalR__MaximumReceiveMessageSize: "65536"
+
+---
+# =============================================================================
+# Secret
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: blazor-secrets
+  namespace: blazor-server
+type: Opaque
+stringData:
+  INTERNAL_API_KEY: "CHANGEZ-MOI-EN-PRODUCTION"
+  REDIS_CONNECTION: "redis:6379"
+
+---
+# =============================================================================
+# Redis - Backplane SignalR
+# =============================================================================
+# Nécessaire pour que les connexions SignalR fonctionnent
+# entre plusieurs pods Blazor Server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: blazor-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: blazor-server
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+
+---
+# =============================================================================
+# Deployment - Blazor Server
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blazor
+  namespace: blazor-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: blazor
+  template:
+    metadata:
+      labels:
+        app: blazor
+    spec:
+      containers:
+      - name: blazor
+        image: your-registry/blazor-server:latest
+        ports:
+        - containerPort: 5000
+        envFrom:
+        - configMapRef:
+            name: blazor-config
+        env:
+        - name: INTERNAL_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: blazor-secrets
+              key: INTERNAL_API_KEY
+        - name: REDIS_CONNECTION
+          valueFrom:
+            secretKeyRef:
+              name: blazor-secrets
+              key: REDIS_CONNECTION
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blazor
+  namespace: blazor-server
+spec:
+  selector:
+    app: blazor
+  ports:
+  - port: 80
+    targetPort: 5000
+  # Session affinity pour SignalR
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 3600
+
+---
+# =============================================================================
+# Deployment - API Interne
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: blazor-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: api
+        image: your-registry/blazor-server-api:latest
+        ports:
+        - containerPort: 5001
+        env:
+        - name: ASPNETCORE_ENVIRONMENT
+          value: "Production"
+        - name: ASPNETCORE_URLS
+          value: "http://+:5001"
+        - name: ApiSettings__InternalApiKey
+          valueFrom:
+            secretKeyRef:
+              name: blazor-secrets
+              key: INTERNAL_API_KEY
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+---
+# =============================================================================
+# Service API - ClusterIP uniquement (interne)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: blazor-server
+spec:
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 5001
+  type: ClusterIP  # Pas d'exposition externe !
+
+---
+# =============================================================================
+# Ingress - Point d'entrée (Blazor Server uniquement)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: blazor-server-ingress
+  namespace: blazor-server
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # IMPORTANT : Sticky sessions pour SignalR
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/session-cookie-name: "blazor-session"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "3600"
+    # Support WebSocket
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+    nginx.ingress.kubernetes.io/limit-rps: "5"
+spec:
+  tls:
+  - hosts:
+    - votre-app.com
+    secretName: blazor-server-tls
+  rules:
+  - host: votre-app.com
+    http:
+      paths:
+      # Tout le trafic vers Blazor Server
+      # PAS DE ROUTE /api - l'API est interne !
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: blazor
+            port:
+              number: 80
+
+---
+# =============================================================================
+# NetworkPolicy - Isolation stricte
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-isolation
+  namespace: blazor-server
+spec:
+  podSelector:
+    matchLabels:
+      app: api
+  policyTypes:
+  - Ingress
+  ingress:
+  # L'API accepte UNIQUEMENT les connexions depuis Blazor Server
+  - from:
+    - podSelector:
+        matchLabels:
+          app: blazor
+    ports:
+    - protocol: TCP
+      port: 5001
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: blazor-policy
+  namespace: blazor-server
+spec:
+  podSelector:
+    matchLabels:
+      app: blazor
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Accepter depuis l'ingress controller
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 5000
+  egress:
+  # Vers l'API interne
+  - to:
+    - podSelector:
+        matchLabels:
+          app: api
+    ports:
+    - protocol: TCP
+      port: 5001
+  # Vers Redis
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  # DNS
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: UDP
+      port: 53
