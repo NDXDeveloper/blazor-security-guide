@@ -69,12 +69,12 @@ jobs:
     - name: Build Docker images (WASM)
       run: |
         cd blazor-wasm
-        docker-compose build
+        docker compose build
 
     - name: Start services
       run: |
         cd blazor-wasm
-        docker-compose up -d
+        docker compose up -d
         # Attendre que les services soient prêts
         sleep 10
 
@@ -84,7 +84,7 @@ jobs:
         echo "HTTP Code: $HTTP_CODE"
         if [ "$HTTP_CODE" != "200" ]; then
           echo "API not accessible"
-          docker-compose -f blazor-wasm/docker-compose.yml logs
+          docker compose -f blazor-wasm/docker compose.yml logs
           exit 1
         fi
         echo "✅ API is accessible"
@@ -151,7 +151,7 @@ jobs:
       if: always()
       run: |
         cd blazor-wasm
-        docker-compose down
+        docker compose down
 
   # ===========================================================================
   # Job 3 : Tests Docker (Server - API Interne)
@@ -168,12 +168,12 @@ jobs:
     - name: Build Docker images (Server)
       run: |
         cd blazor-server
-        docker-compose build
+        docker compose build
 
     - name: Start services
       run: |
         cd blazor-server
-        docker-compose up -d
+        docker compose up -d
         sleep 15  # Blazor Server needs more time
 
     - name: Test Blazor Server is accessible
@@ -182,7 +182,7 @@ jobs:
         echo "HTTP Code: $HTTP_CODE"
         if [ "$HTTP_CODE" != "200" ]; then
           echo "Blazor Server not accessible"
-          docker-compose -f blazor-server/docker-compose.yml logs
+          docker compose -f blazor-server/docker compose.yml logs
           exit 1
         fi
         echo "✅ Blazor Server is accessible"
@@ -248,7 +248,7 @@ jobs:
       if: always()
       run: |
         cd blazor-server
-        docker-compose down
+        docker compose down
 
   # ===========================================================================
   # Job 4 : Tests de Résilience
@@ -265,7 +265,7 @@ jobs:
     - name: Start WASM services
       run: |
         cd blazor-wasm
-        docker-compose up -d
+        docker compose up -d
         sleep 10
 
     - name: Install hey (load testing tool)
@@ -288,7 +288,7 @@ jobs:
       if: always()
       run: |
         cd blazor-wasm
-        docker-compose down
+        docker compose down
 
   # ===========================================================================
   # Job 5 : Rapport Final
