@@ -116,9 +116,9 @@ jobs:
         for i in $(seq 1 150); do
           CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:80/api/weather)
           if [ "$CODE" == "200" ]; then
-            ((SUCCESS++))
+            SUCCESS=$((SUCCESS + 1))
           elif [ "$CODE" == "429" ]; then
-            ((RATE_LIMITED++))
+            RATE_LIMITED=$((RATE_LIMITED + 1))
           fi
         done
 
