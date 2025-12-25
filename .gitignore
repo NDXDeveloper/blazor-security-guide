@@ -1,0 +1,129 @@
+# =============================================================================
+# .NET
+# =============================================================================
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.rsuser
+*.log
+*.cache
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# NuGet
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+# =============================================================================
+# Secrets et configuration locale
+# =============================================================================
+*.env
+*.env.local
+*.env.*.local
+appsettings.Development.json
+appsettings.Local.json
+secrets.json
+
+# Certificats
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# =============================================================================
+# Docker
+# =============================================================================
+docker-compose.override.yml
+docker-compose.local.yml
+.docker/
+
+# =============================================================================
+# Kubernetes
+# =============================================================================
+kubeconfig
+*.kubeconfig
+secrets.yaml
+*-secrets.yaml
+
+# =============================================================================
+# IDE
+# =============================================================================
+# Visual Studio
+.vs/
+*.suo
+*.user
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# =============================================================================
+# OS
+# =============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# =============================================================================
+# Divers
+# =============================================================================
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Test results
+TestResults/
+*.trx
+coverage/
+*.coverage
+*.coveragexml
+
+# Publish output
+publish/
+out/
