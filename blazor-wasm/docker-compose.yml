@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # NGINX - Reverse Proxy
+  # =============================================================================
+  # Point d'entrée unique. Gère SSL, rate limiting, headers sécurité.
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ../nginx/nginx-wasm.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend/wwwroot:/usr/share/nginx/html:ro  # Fichiers statiques WASM
+      # Décommenter pour SSL :
+      # - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - api
+    networks:
+      - frontend
+    restart: unless-stopped
+
+  # =============================================================================
+  # API ASP.NET Core - PUBLIQUE
+  # =============================================================================
+  # ATTENTION : Cette API est exposée à Internet via Nginx.
+  # Elle DOIT implémenter :
+  # - Rate limiting
+  # - Validation des entrées
+  # - Authentification/Autorisation
+  # - Logging des requêtes suspectes
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    # IMPORTANT : On utilise "expose" et non "ports" pour ne pas exposer
+    # directement sur l'hôte. Nginx fait le proxy.
+    # Cependant, l'API reste accessible via Nginx donc elle est PUBLIQUE.
+    expose:
+      - "5000"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:5000
+      # Rate limiting côté application
+      - RateLimiting__PermitLimit=100
+      - RateLimiting__Window=60
+      - RateLimiting__QueueLimit=10
+    networks:
+      - frontend
+    restart: unless-stopped
+    # Limites de ressources pour éviter l'épuisement
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+networks:
+  frontend:
+    driver: bridge
