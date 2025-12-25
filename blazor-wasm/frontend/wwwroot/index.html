@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blazor WASM Security Demo</title>
+    <base href="/" />
+
+    <!--
+    ==========================================================================
+    HEADERS DE SÉCURITÉ
+    ==========================================================================
+    Ces headers doivent aussi être configurés côté serveur (Nginx).
+    Les meta tags sont un fallback, pas une solution complète.
+    -->
+
+    <!-- Content Security Policy - Restrictive -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self';
+                   script-src 'self' 'unsafe-eval';
+                   style-src 'self' 'unsafe-inline';
+                   img-src 'self' data:;
+                   connect-src 'self' https://api.votredomaine.com;
+                   frame-ancestors 'none';
+                   form-action 'self';">
+
+    <!-- Pas de referrer vers des sites tiers -->
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+
+    <link href="css/app.css" rel="stylesheet" />
+</head>
+<body>
+    <div id="app">
+        <div class="loading">
+            <p>Chargement de l'application...</p>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Une erreur s'est produite.
+        <a href="" class="reload">Recharger</a>
+    </div>
+
+    <!-- Blazor WASM -->
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+</html>

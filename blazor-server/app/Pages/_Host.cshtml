@@ -1,0 +1,39 @@
+@page "/"
+@namespace BlazorServer.Pages
+@addTagHelper *, Microsoft.AspNetCore.Mvc.TagHelpers
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blazor Server Security Demo</title>
+    <base href="~/" />
+
+    <!-- CSP restrictive -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self';
+                   script-src 'self' 'unsafe-inline';
+                   style-src 'self' 'unsafe-inline';
+                   img-src 'self' data:;
+                   connect-src 'self' wss: ws:;
+                   frame-ancestors 'none';">
+
+    <link href="css/site.css" rel="stylesheet" />
+</head>
+<body>
+    <component type="typeof(App)" render-mode="ServerPrerendered" />
+
+    <div id="blazor-error-ui">
+        <environment include="Staging,Production">
+            Une erreur s'est produite.
+        </environment>
+        <environment include="Development">
+            Une erreur s'est produite. Voir la console pour les détails.
+        </environment>
+        <a href="" class="reload">Recharger</a>
+    </div>
+
+    <script src="_framework/blazor.server.js"></script>
+</body>
+</html>
