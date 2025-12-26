@@ -1,5 +1,7 @@
 # Guide de Sécurité Blazor en Production
 
+[![Security Tests](https://github.com/NDXDeveloper/blazor-security-guide/actions/workflows/security-tests.yml/badge.svg)](https://github.com/NDXDeveloper/blazor-security-guide/actions/workflows/security-tests.yml)
+
 > Un guide pragmatique et honnête pour sécuriser vos applications Blazor face aux menaces réelles : DDoS, abus d'API, bots, scans automatisés.
 
 **Ce guide n'est pas un discours marketing.** Il explique ce qui protège vraiment, ce qui ne protège pas, et pourquoi Blazor seul ne garantit rien en matière de sécurité.
